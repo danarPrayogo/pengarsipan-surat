@@ -13,9 +13,22 @@ async function main() {
   console.log('Seeding database...');
 
   // 1. Clean existing data
+  await prisma.verificationCode.deleteMany();
+  await prisma.user.deleteMany();
   await prisma.suratMasuk.deleteMany();
   await prisma.suratKeluar.deleteMany();
   await prisma.jenisSurat.deleteMany();
+
+  // 1b. Seed default User (username: admin, password: password123, email: admin@bmkg.go.id)
+  // SHA-256 for password123: ef92b778bafe771e8929ab5b6d54797728004b6b53002c74063110a11761d55d
+  const adminUser = await prisma.user.create({
+    data: {
+      username: 'admin',
+      password: 'ef92b778bafe771e8929ab5b6d54797728004b6b53002c74063110a11761d55d',
+      email: 'admin@bmkg.go.id'
+    }
+  });
+  console.log('Seeded default Admin user:', adminUser.username);
 
   // 2. Seed JenisSurat
   const jenisSuratList = [

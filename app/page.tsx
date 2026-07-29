@@ -1,9 +1,10 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Image from 'next/image'
-import { Mail, Lock, Eye, EyeOff, Shield, Key, X, Check, AlertCircle } from 'lucide-react'
+import { Mail, Lock, Eye, EyeOff, Shield, Key, X, Check, AlertCircle, ArrowLeft, Loader2 } from 'lucide-react'
+import { loginUser, sendVerificationCode, resetCredentials } from '@/app/actions/Auth'
 
 export default function Login() {
   const router = useRouter()
@@ -14,100 +15,108 @@ export default function Login() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-  // Saved credentials state (fallback/sync)
-  const [dbUsername, setDbUsername] = useState('admin')
-  const [dbPassword, setDbPassword] = useState('password123')
-
   // Success message state
   const [successMessage, setSuccessMessage] = useState('')
 
   // Reset Modal states
   const [isResetModalOpen, setIsResetModalOpen] = useState(false)
+  const [resetStep, setResetStep] = useState<'request' | 'verify'>('request')
+  const [resetEmail, setResetEmail] = useState('')
   const [resetSecurityCode, setResetSecurityCode] = useState('')
   const [resetUsername, setResetUsername] = useState('')
   const [resetPassword, setResetPassword] = useState('')
   const [resetConfirmPassword, setResetConfirmPassword] = useState('')
   const [showResetPassword, setShowResetPassword] = useState(false)
   const [resetError, setResetError] = useState('')
+  const [resetLoading, setResetLoading] = useState(false)
+  const [mockedCodeInfo, setMockedCodeInfo] = useState('')
 
-  // Sync credentials from localStorage on mount
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      if (!localStorage.getItem('admin_username')) {
-        localStorage.setItem('admin_username', 'admin')
-      }
-      if (!localStorage.getItem('admin_password')) {
-        localStorage.setItem('admin_password', 'password123')
-      }
-      setDbUsername(localStorage.getItem('admin_username') || 'admin')
-      setDbPassword(localStorage.getItem('admin_password') || 'password123')
-    }
-  }, [])
-
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
     setSuccessMessage('')
     setLoading(true)
 
-    // Simulating authentication
-    setTimeout(() => {
-      const storedUser = localStorage.getItem('admin_username') || 'admin'
-      const storedPass = localStorage.getItem('admin_password') || 'password123'
-
-      if (emailOrUsername === storedUser && password === storedPass) {
+    try {
+      const res = await loginUser(emailOrUsername.trim(), password)
+      if (res.success) {
         router.push('/dashboard')
-      } else if (!emailOrUsername || !password) {
-        setError('Email/Username dan Password harus diisi.')
-        setLoading(false)
-      } else {
-        setError('Kredensial salah. Silakan coba lagi atau reset jika lupa.')
-        setLoading(false)
       }
-    }, 800)
+    } catch (err: any) {
+      setError(err.message || 'Kredensial salah atau terjadi kesalahan.')
+      setLoading(false)
+    }
   }
 
-  const handleResetSubmit = (e: React.FormEvent) => {
+  const handleRequestCode = async (e: React.FormEvent) => {
     e.preventDefault()
     setResetError('')
+    setResetLoading(true)
+    setMockedCodeInfo('')
 
-    if (resetSecurityCode !== 'BMKG123') {
-      setResetError('Kode Keamanan salah. Silakan hubungi Administrator Utama atau gunakan kode default: BMKG123')
-      return
+    try {
+      const res = await sendVerificationCode(resetEmail.trim())
+      if (res.success) {
+        setResetStep('verify')
+        if (res.isMocked && res.code) {
+          setMockedCodeInfo(res.code)
+        }
+      }
+    } catch (err: any) {
+      setResetError(err.message || 'Gagal mengirim kode verifikasi.')
+    } finally {
+      setResetLoading(false)
     }
+  }
+
+  const handleResetSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setResetError('')
+    setResetLoading(true)
 
     if (resetUsername.trim().length < 3) {
       setResetError('Username baru minimal harus 3 karakter')
+      setResetLoading(false)
       return
     }
 
     if (resetPassword.trim().length < 6) {
       setResetError('Password baru minimal harus 6 karakter')
+      setResetLoading(false)
       return
     }
 
     if (resetPassword !== resetConfirmPassword) {
       setResetError('Password baru dan Konfirmasi Password tidak cocok')
+      setResetLoading(false)
       return
     }
 
-    // Save to localStorage
-    localStorage.setItem('admin_username', resetUsername.trim())
-    localStorage.setItem('admin_password', resetPassword)
-
-    // Update local state
-    setDbUsername(resetUsername.trim())
-    setDbPassword(resetPassword)
-
-    // Show success message on main page
-    setSuccessMessage('Username dan Password berhasil diperbarui! Silakan login kembali.')
-    setIsResetModalOpen(false)
-
-    // Reset inputs
-    setResetSecurityCode('')
-    setResetUsername('')
-    setResetPassword('')
-    setResetConfirmPassword('')
+    try {
+      const res = await resetCredentials(
+        resetEmail.trim(),
+        resetSecurityCode.trim(),
+        resetUsername.trim(),
+        resetPassword
+      )
+      if (res.success) {
+        setSuccessMessage('Username dan Password berhasil diperbarui! Silakan login dengan kredensial baru.')
+        setIsResetModalOpen(false)
+        
+        // Reset states
+        setResetEmail('')
+        setResetSecurityCode('')
+        setResetUsername('')
+        setResetPassword('')
+        setResetConfirmPassword('')
+        setResetStep('request')
+        setMockedCodeInfo('')
+      }
+    } catch (err: any) {
+      setResetError(err.message || 'Gagal mereset kredensial.')
+    } finally {
+      setResetLoading(false)
+    }
   }
 
   return (
@@ -337,6 +346,7 @@ export default function Login() {
                   onClick={() => {
                     setResetError('')
                     setIsResetModalOpen(true)
+                    setResetStep('request')
                   }}
                   className="text-xs font-semibold text-blue-100 underline hover:text-white hover:cursor-pointer transition-colors bg-transparent border-none outline-none"
                 >
@@ -378,12 +388,26 @@ export default function Login() {
             {/* Modal Header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-100 bg-[#f8fafc]">
               <div className="flex items-center gap-2.5">
+                {resetStep === 'verify' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setResetStep('request')
+                      setResetError('')
+                    }}
+                    className="p-1.5 rounded-lg border border-zinc-200 hover:bg-zinc-50 text-zinc-500 hover:text-zinc-700 transition-all cursor-pointer mr-1"
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                  </button>
+                )}
                 <div className="p-2 bg-blue-50 text-[#1d56a5] rounded-lg border border-blue-100">
                   <Key className="h-5 w-5" />
                 </div>
                 <div>
                   <h3 className="text-sm font-extrabold text-zinc-800">Reset Kredensial</h3>
-                  <p className="text-[10px] font-semibold text-zinc-500">Ubah username & password admin</p>
+                  <p className="text-[10px] font-semibold text-zinc-500">
+                    {resetStep === 'request' ? 'Kirim kode verifikasi ke email' : 'Verifikasi kode & ubah akun'}
+                  </p>
                 </div>
               </div>
               <button
@@ -395,115 +419,200 @@ export default function Login() {
               </button>
             </div>
 
-            <form onSubmit={handleResetSubmit}>
-              {/* Modal Body */}
-              <div className="p-6 flex flex-col gap-4">
-                
-                {/* Information Info Alert */}
-                <div className="p-3 bg-blue-50 border border-blue-100 rounded-xl text-xs font-semibold text-[#1e53a4] flex items-start gap-2.5">
-                  <Shield className="h-5 w-5 text-blue-500 flex-shrink-0 mt-0.5" />
-                  <div>
-                    Untuk mengubah username atau password, masukkan Kode Keamanan default yang telah disediakan.
-                    <span className="block mt-1 font-bold text-[#1d56a5]">Kode Keamanan: BMKG123</span>
+            {/* Modal Form Step 1: Request Code */}
+            {resetStep === 'request' && (
+              <form onSubmit={handleRequestCode}>
+                <div className="p-6 flex flex-col gap-4">
+                  {/* Info alert */}
+                  <div className="p-3 bg-blue-50 border border-blue-100 rounded-xl text-xs font-semibold text-[#1e53a4] flex items-start gap-2.5">
+                    <Mail className="h-5 w-5 text-blue-500 flex-shrink-0 mt-0.5" />
+                    <div>
+                      Masukkan email Administrator yang terdaftar. Sistem akan mengirimkan kode verifikasi 6 digit ke email Anda.
+                      <span className="block mt-1 font-bold text-[#1d56a5]">*Email default: admin@bmkg.go.id</span>
+                    </div>
                   </div>
-                </div>
 
-                {/* Reset Error Message */}
-                {resetError && (
-                  <div className="p-3 bg-red-50 border border-red-100 rounded-xl text-xs font-semibold text-red-600 flex items-center gap-2">
-                    <AlertCircle className="h-4.5 w-4.5 text-red-500 flex-shrink-0" />
-                    {resetError}
-                  </div>
-                )}
+                  {/* Error Alert */}
+                  {resetError && (
+                    <div className="p-3 bg-red-50 border border-red-100 rounded-xl text-xs font-semibold text-red-600 flex items-center gap-2">
+                      <AlertCircle className="h-4.5 w-4.5 text-red-500 flex-shrink-0" />
+                      {resetError}
+                    </div>
+                  )}
 
-                {/* Security Code Input */}
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-bold text-zinc-500 tracking-wider">
-                    Kode Keamanan
-                  </label>
-                  <input
-                    type="password"
-                    placeholder="Masukkan Kode Keamanan"
-                    value={resetSecurityCode}
-                    onChange={(e) => setResetSecurityCode(e.target.value)}
-                    className="w-full bg-[#f8fafc] border border-zinc-200 rounded-lg px-3.5 py-2.5 text-xs font-semibold text-zinc-700 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-blue-400 transition-all"
-                    required
-                  />
-                </div>
-
-                {/* New Username Input */}
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-bold text-zinc-500 tracking-wider">
-                    Username Baru
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Masukkan Username baru"
-                    value={resetUsername}
-                    onChange={(e) => setResetUsername(e.target.value)}
-                    className="w-full bg-[#f8fafc] border border-zinc-200 rounded-lg px-3.5 py-2.5 text-xs font-semibold text-zinc-700 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-blue-400 transition-all"
-                    required
-                  />
-                </div>
-
-                {/* New Password Input */}
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-bold text-zinc-500 tracking-wider">
-                    Password Baru
-                  </label>
-                  <div className="relative">
+                  {/* Email Input */}
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-bold text-zinc-500 tracking-wider">
+                      Email Terdaftar
+                    </label>
                     <input
-                      type={showResetPassword ? 'text' : 'password'}
-                      placeholder="Masukkan Password baru (min. 6 karakter)"
-                      value={resetPassword}
-                      onChange={(e) => setResetPassword(e.target.value)}
-                      className="w-full bg-[#f8fafc] border border-zinc-200 rounded-lg pl-3.5 pr-10 py-2.5 text-xs font-semibold text-zinc-700 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-blue-400 transition-all"
+                      type="email"
+                      placeholder="Masukkan email Anda (misal: admin@bmkg.go.id)"
+                      value={resetEmail}
+                      onChange={(e) => setResetEmail(e.target.value)}
+                      className="w-full bg-[#f8fafc] border border-zinc-200 rounded-lg px-3.5 py-2.5 text-xs font-semibold text-zinc-700 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-blue-400 transition-all"
                       required
                     />
-                    <button
-                      type="button"
-                      onClick={() => setShowResetPassword(!showResetPassword)}
-                      className="absolute right-3 top-3 text-zinc-400 hover:text-zinc-600 focus:outline-none transition-colors"
-                    >
-                      {showResetPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </button>
                   </div>
                 </div>
 
-                {/* Confirm Password Input */}
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-bold text-zinc-500 tracking-wider">
-                    Konfirmasi Password Baru
-                  </label>
-                  <input
-                    type="password"
-                    placeholder="Ulangi Password baru"
-                    value={resetConfirmPassword}
-                    onChange={(e) => setResetConfirmPassword(e.target.value)}
-                    className="w-full bg-[#f8fafc] border border-zinc-200 rounded-lg px-3.5 py-2.5 text-xs font-semibold text-zinc-700 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-blue-400 transition-all"
-                    required
-                  />
+                {/* Footer */}
+                <div className="bg-[#f8fafc] px-6 py-4 border-t border-zinc-200 flex items-center justify-end gap-3 select-none">
+                  <button
+                    type="button"
+                    onClick={() => setIsResetModalOpen(false)}
+                    className="px-4 py-2.5 rounded-lg border border-zinc-200 bg-white text-zinc-600 text-xs font-bold hover:bg-zinc-50 transition-all cursor-pointer"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={resetLoading}
+                    className="flex items-center justify-center gap-1.5 bg-[#1d56a5] text-white px-4.5 py-2.5 rounded-lg text-xs font-bold hover:bg-[#1a4d94] active:scale-95 disabled:opacity-70 disabled:pointer-events-none transition-all cursor-pointer shadow-md shadow-blue-800/10"
+                  >
+                    {resetLoading ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Mengirim...
+                      </>
+                    ) : (
+                      'Kirim Kode Verifikasi'
+                    )}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* Modal Form Step 2: Verify and Reset */}
+            {resetStep === 'verify' && (
+              <form onSubmit={handleResetSubmit}>
+                <div className="p-6 flex flex-col gap-4 max-h-[60vh] overflow-y-auto">
+                  
+                  {/* Verification Notice */}
+                  <div className="p-3 bg-emerald-50 border border-emerald-100 rounded-xl text-xs font-semibold text-emerald-800 flex items-start gap-2.5">
+                    <Shield className="h-5 w-5 text-emerald-500 flex-shrink-0 mt-0.5" />
+                    <div>
+                      Kode verifikasi 6 digit telah dikirim ke <strong>{resetEmail}</strong>. Silakan periksa kotak masuk atau spam email Anda.
+                    </div>
+                  </div>
+
+                  {/* Mock code tip when SMTP isn't set */}
+                  {mockedCodeInfo && (
+                    <div className="p-3 bg-amber-50 border border-amber-100 rounded-xl text-xs font-semibold text-amber-800 flex items-start gap-2.5">
+                      <AlertCircle className="h-5 w-5 text-amber-500 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <strong>Simulasi Pengiriman:</strong> SMTP email tidak terdeteksi di server. Gunakan kode simulasi di bawah ini untuk mencoba:
+                        <span className="block mt-1 font-extrabold text-sm text-[#1d56a5] tracking-widest">{mockedCodeInfo}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Error Alert */}
+                  {resetError && (
+                    <div className="p-3 bg-red-50 border border-red-100 rounded-xl text-xs font-semibold text-red-600 flex items-center gap-2">
+                      <AlertCircle className="h-4.5 w-4.5 text-red-500 flex-shrink-0" />
+                      {resetError}
+                    </div>
+                  )}
+
+                  {/* Code Input */}
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-bold text-zinc-500 tracking-wider">
+                      Kode Verifikasi (6 Digit)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Masukkan 6-digit kode verifikasi"
+                      value={resetSecurityCode}
+                      onChange={(e) => setResetSecurityCode(e.target.value)}
+                      maxLength={6}
+                      className="w-full bg-[#f8fafc] border border-zinc-200 rounded-lg px-3.5 py-2.5 text-xs font-semibold text-zinc-700 tracking-widest text-center focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-blue-400 transition-all font-mono"
+                      required
+                    />
+                  </div>
+
+                  {/* New Username Input */}
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-bold text-zinc-500 tracking-wider">
+                      Username Baru
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Masukkan Username baru (min. 3 karakter)"
+                      value={resetUsername}
+                      onChange={(e) => setResetUsername(e.target.value)}
+                      className="w-full bg-[#f8fafc] border border-zinc-200 rounded-lg px-3.5 py-2.5 text-xs font-semibold text-zinc-700 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-blue-400 transition-all"
+                      required
+                    />
+                  </div>
+
+                  {/* New Password Input */}
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-bold text-zinc-500 tracking-wider">
+                      Password Baru
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showResetPassword ? 'text' : 'password'}
+                        placeholder="Masukkan Password baru (min. 6 karakter)"
+                        value={resetPassword}
+                        onChange={(e) => setResetPassword(e.target.value)}
+                        className="w-full bg-[#f8fafc] border border-zinc-200 rounded-lg pl-3.5 pr-10 py-2.5 text-xs font-semibold text-zinc-700 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-blue-400 transition-all"
+                        required
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowResetPassword(!showResetPassword)}
+                        className="absolute right-3 top-3 text-zinc-400 hover:text-zinc-600 focus:outline-none transition-colors"
+                      >
+                        {showResetPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Confirm Password Input */}
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-bold text-zinc-500 tracking-wider">
+                      Konfirmasi Password Baru
+                    </label>
+                    <input
+                      type="password"
+                      placeholder="Ulangi Password baru"
+                      value={resetConfirmPassword}
+                      onChange={(e) => setResetConfirmPassword(e.target.value)}
+                      className="w-full bg-[#f8fafc] border border-zinc-200 rounded-lg px-3.5 py-2.5 text-xs font-semibold text-zinc-700 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-blue-400 transition-all"
+                      required
+                    />
+                  </div>
+
                 </div>
 
-              </div>
-
-              {/* Modal Footer */}
-              <div className="bg-[#f8fafc] px-6 py-4 border-t border-zinc-200 flex items-center justify-end gap-3 select-none">
-                <button
-                  type="button"
-                  onClick={() => setIsResetModalOpen(false)}
-                  className="px-4 py-2.5 rounded-lg border border-zinc-200 bg-white text-zinc-600 text-xs font-bold hover:bg-zinc-50 transition-all cursor-pointer"
-                >
-                  Batal
-                </button>
-                <button
-                  type="submit"
-                  className="bg-[#1d56a5] text-white px-4.5 py-2.5 rounded-lg text-xs font-bold hover:bg-[#1a4d94] active:scale-95 transition-all cursor-pointer shadow-md shadow-blue-800/10"
-                >
-                  Simpan Perubahan
-                </button>
-              </div>
-            </form>
+                {/* Footer */}
+                <div className="bg-[#f8fafc] px-6 py-4 border-t border-zinc-200 flex items-center justify-end gap-3 select-none">
+                  <button
+                    type="button"
+                    onClick={() => setIsResetModalOpen(false)}
+                    className="px-4 py-2.5 rounded-lg border border-zinc-200 bg-white text-zinc-600 text-xs font-bold hover:bg-zinc-50 transition-all cursor-pointer"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={resetLoading}
+                    className="flex items-center justify-center gap-1.5 bg-[#1d56a5] text-white px-4.5 py-2.5 rounded-lg text-xs font-bold hover:bg-[#1a4d94] active:scale-95 disabled:opacity-70 disabled:pointer-events-none transition-all cursor-pointer shadow-md shadow-blue-800/10"
+                  >
+                    {resetLoading ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Memproses...
+                      </>
+                    ) : (
+                      'Simpan Perubahan'
+                    )}
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}
