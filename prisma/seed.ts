@@ -19,13 +19,13 @@ async function main() {
   await prisma.suratKeluar.deleteMany();
   await prisma.jenisSurat.deleteMany();
 
-  // 1b. Seed default User (username: admin, password: password123, email: admin@bmkg.go.id)
+  // 1b. Seed default User (username: admin, password: password123, email: danarprayoga337@gmail.com)
   // SHA-256 for password123: ef92b778bafe771e8929ab5b6d54797728004b6b53002c74063110a11761d55d
   const adminUser = await prisma.user.create({
     data: {
       username: 'admin',
       password: 'ef92b778bafe771e8929ab5b6d54797728004b6b53002c74063110a11761d55d',
-      email: 'admin@bmkg.go.id'
+      email: 'danarprayoga337@gmail.com'
     }
   });
   console.log('Seeded default Admin user:', adminUser.username);
