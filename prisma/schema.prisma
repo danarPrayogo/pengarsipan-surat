@@ -1,0 +1,43 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model JenisSurat {
+  id          Int           @id @default(autoincrement())
+  kode        String        @unique // cth: "UND" untuk Undangan
+  nama        String        // cth: "Surat Undangan"
+  suratMasuk  SuratMasuk[]
+  suratKeluar SuratKeluar[]
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+}
+
+model SuratMasuk {
+  id             Int        @id @default(autoincrement())
+  nomorSurat     String     @unique
+  pengirim       String
+  perihal        String
+  tanggalDiterima DateTime
+  fileUrl        String?    // Menyimpan path atau URL dokumen scan
+  jenisSuratId   Int
+  jenisSurat     JenisSurat @relation(fields: [jenisSuratId], references: [id])
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+}
+
+model SuratKeluar {
+  id             Int        @id @default(autoincrement())
+  nomorSurat     String     @unique
+  tujuan         String
+  perihal        String
+  tanggalDikirim DateTime
+  fileUrl        String?
+  jenisSuratId   Int
+  jenisSurat     JenisSurat @relation(fields: [jenisSuratId], references: [id])
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+}
