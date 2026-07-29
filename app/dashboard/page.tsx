@@ -198,6 +198,9 @@ export default function Dashboard() {
     name: ''
   })
 
+  // Logout Dialog state
+  const [isLogoutModalOpen, setIsLogoutModalOpen] = useState(false)
+
   // Load initial global categories
   useEffect(() => {
     loadGlobalCategories()
@@ -534,9 +537,11 @@ export default function Dashboard() {
 
   // Handle Logout
   const handleLogout = () => {
-    if (confirm('Apakah Anda yakin ingin keluar?')) {
-      router.push('/')
-    }
+    setIsLogoutModalOpen(true)
+  }
+
+  const executeLogout = () => {
+    router.push('/')
   }
 
   // Color mapper for letter type badges
@@ -1855,6 +1860,42 @@ export default function Dashboard() {
                 className="flex-1 bg-red-600 text-white px-4 py-2.5 rounded-lg text-xs font-bold hover:bg-red-700 active:scale-95 transition-all cursor-pointer shadow-md shadow-red-800/10"
               >
                 Hapus
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- CONFIRM LOGOUT DIALOG --- */}
+      {isLogoutModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in">
+          <div className="bg-white rounded-2xl border border-zinc-200 shadow-2xl w-full max-w-sm overflow-hidden animate-zoom-in">
+            <div className="p-5 flex flex-col items-center gap-4 text-center">
+              <div className="p-3 bg-amber-50 text-amber-500 rounded-full border border-amber-100">
+                <LogOut className="h-6 w-6 animate-pulse" />
+              </div>
+              <div>
+                <h3 className="text-sm font-extrabold text-zinc-800">Yakin Ingin Keluar?</h3>
+                <p className="mt-1 text-xs font-semibold text-zinc-500 px-3">
+                  Anda akan keluar dari sesi ini dan kembali ke halaman login E-Persuratan BMKG.
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-[#f8fafc] px-5 py-4 border-t border-zinc-200 flex items-center justify-center gap-3 select-none">
+              <button
+                type="button"
+                onClick={() => setIsLogoutModalOpen(false)}
+                className="flex-1 px-4 py-2.5 rounded-lg border border-zinc-200 bg-white text-zinc-600 text-xs font-bold hover:bg-zinc-50 active:scale-95 transition-all cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={executeLogout}
+                className="flex-1 bg-[#1d56a5] text-white px-4 py-2.5 rounded-lg text-xs font-bold hover:bg-[#1a4d94] active:scale-95 transition-all cursor-pointer shadow-md shadow-blue-800/10"
+              >
+                Keluar
               </button>
             </div>
           </div>
