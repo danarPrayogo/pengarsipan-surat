@@ -25,6 +25,7 @@ model SuratMasuk {
   fileUrl        String?    // Menyimpan path atau URL dokumen scan
   jenisSuratId   Int
   jenisSurat     JenisSurat @relation(fields: [jenisSuratId], references: [id])
+  messageId      String?    @unique // Untuk mencegah duplikasi sync email
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
 }
@@ -38,6 +39,7 @@ model SuratKeluar {
   fileUrl        String?
   jenisSuratId   Int
   jenisSurat     JenisSurat @relation(fields: [jenisSuratId], references: [id])
+  messageId      String?    @unique // Untuk mencegah duplikasi sync email
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
 }

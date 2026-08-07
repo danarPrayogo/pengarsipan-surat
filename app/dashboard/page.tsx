@@ -24,10 +24,14 @@ import {
   Edit,
   Trash2,
   Download,
+  Upload,
   TrendingUp,
   Printer,
   FileSpreadsheet,
-  AlertTriangle
+  AlertTriangle,
+  MailCheck,
+  RefreshCw,
+  Eye
 } from 'lucide-react'
 import { 
   getSuratMasukDisortir, 
@@ -52,6 +56,13 @@ import {
   getDashboardStats,
   getLaporanStats
 } from '@/app/actions/Dashboard'
+import {
+  syncEmailsAction,
+  getSuratUsageStats,
+  archiveAllLettersAction,
+  clearAllLettersAction
+} from '@/app/actions/EmailSync'
+import JSZip from 'jszip'
 
 // Type definitions matching prisma
 interface JenisSurat {
@@ -72,6 +83,7 @@ interface SuratMasuk {
   tanggalDiterima: Date
   jenisSuratId: number
   jenisSurat: JenisSurat
+  fileUrl?: string | null
 }
 
 interface SuratKeluar {
@@ -82,6 +94,7 @@ interface SuratKeluar {
   tanggalDikirim: Date
   jenisSuratId: number
   jenisSurat: JenisSurat
+  fileUrl?: string | null
 }
 
 interface DashboardData {
@@ -143,6 +156,7 @@ export default function Dashboard() {
     perihal: '',
     tanggalDiterima: '',
     jenisSuratId: '',
+    fileUrl: '',
   })
 
   // Surat Keluar States
@@ -163,6 +177,7 @@ export default function Dashboard() {
     perihal: '',
     tanggalDikirim: '',
     jenisSuratId: '',
+    fileUrl: '',
   })
 
   // Jenis Surat States
@@ -201,9 +216,189 @@ export default function Dashboard() {
   // Logout Dialog state
   const [isLogoutModalOpen, setIsLogoutModalOpen] = useState(false)
 
-  // Load initial global categories
+  // Email Sync & Archive States
+  const [isSyncing, setIsSyncing] = useState(false)
+  const [isArchiving, setIsArchiving] = useState(false)
+  const [usageStats, setUsageStats] = useState({
+    totalMasuk: 0,
+    totalKeluar: 0,
+    totalCount: 0,
+    isExceeded: false
+  })
+  const [refreshTrigger, setRefreshTrigger] = useState(0)
+
+  // File Viewer Modal States
+  const [viewerOpen, setViewerOpen] = useState(false)
+  const [viewerFileUrl, setViewerFileUrl] = useState('')
+  const [viewerTitle, setViewerTitle] = useState('')
+
+  // Form input modes ('upload' berkas vs 'write' manual)
+  const [smContentMode, setSmContentMode] = useState<'upload' | 'write'>('upload')
+  const [skContentMode, setSkContentMode] = useState<'upload' | 'write'>('upload')
+
+  const openFileViewer = (fileUrl: string | null | undefined, title: string) => {
+    if (!fileUrl) return
+    setViewerFileUrl(fileUrl)
+    setViewerTitle(title)
+    setViewerOpen(true)
+  }
+
+  const loadUsageStats = async () => {
+    try {
+      const stats = await getSuratUsageStats()
+      setUsageStats(stats)
+    } catch (err) {
+      console.error("Gagal memuat statistik kapasitas", err)
+    }
+  }
+
+  const handleSyncEmails = async () => {
+    setIsSyncing(true)
+    try {
+      const res = await syncEmailsAction()
+      if (res.success) {
+        showSuccess(res.message)
+        // Reload active tab data
+        if (activeTab === 'dashboard') {
+          loadDashboardData()
+        } else if (activeTab === 'surat-masuk') {
+          loadSuratMasuk()
+        } else if (activeTab === 'surat-keluar') {
+          loadSuratKeluar()
+        }
+        loadUsageStats()
+      }
+    } catch (err: any) {
+      alert(err.message || 'Gagal melakukan sinkronisasi email')
+    } finally {
+      setIsSyncing(false)
+    }
+  }
+
+  const handleArchiveAndClear = async () => {
+    if (!confirm("Apakah Anda yakin ingin mengarsipkan seluruh surat? Aksi ini akan mengunduh semua berkas surat dan datanya dalam bentuk ZIP, kemudian MENGHAPUS seluruh data dari database agar ruang penyimpanan kosong kembali.")) {
+      return
+    }
+    
+    setIsArchiving(true)
+    try {
+      const { suratMasuk, suratKeluar } = await archiveAllLettersAction()
+      
+      if (suratMasuk.length === 0 && suratKeluar.length === 0) {
+        alert("Tidak ada surat yang dapat diarsipkan.")
+        setIsArchiving(false)
+        return
+      }
+
+      const zip = new JSZip()
+
+      let summaryText = `LAPORAN ARSIP SURAT DINAS\n`
+      summaryText += `Tanggal Pengarsipan: ${new Date().toLocaleString('id-ID')}\n`
+      summaryText += `Total Surat Masuk: ${suratMasuk.length}\n`
+      summaryText += `Total Surat Keluar: ${suratKeluar.length}\n`
+      summaryText += `==========================================\n\n`
+
+      const folderMasuk = zip.folder("Surat_Masuk")
+      summaryText += `--- DAFTAR SURAT MASUK ---\n`
+      suratMasuk.forEach((s, index) => {
+        summaryText += `${index + 1}. Nomor: ${s.nomorSurat} | Pengirim: ${s.pengirim} | Perihal: ${s.perihal} | Tanggal Diterima: ${new Date(s.tanggalDiterima).toLocaleDateString('id-ID')}\n`
+        
+        if (s.fileUrl && s.fileUrl.startsWith('data:')) {
+          const base64Parts = s.fileUrl.split(';base64,')
+          if (base64Parts.length === 2) {
+            const base64Data = base64Parts[1]
+            const mimeType = base64Parts[0].split('data:')[1]
+            let ext = 'pdf'
+            if (mimeType.includes('image/png')) ext = 'png'
+            else if (mimeType.includes('image/jpeg') || mimeType.includes('image/jpg')) ext = 'jpg'
+            else if (mimeType.includes('word')) ext = 'docx'
+
+            const fileName = `${s.nomorSurat.replace(/[\/\\:\*\?"<>\|]/g, '_')}.${ext}`
+            folderMasuk?.file(fileName, base64Data, { base64: true })
+          }
+        }
+      })
+
+      summaryText += `\n`
+
+      const folderKeluar = zip.folder("Surat_Keluar")
+      summaryText += `--- DAFTAR SURAT KELUAR ---\n`
+      suratKeluar.forEach((s, index) => {
+        summaryText += `${index + 1}. Nomor: ${s.nomorSurat} | Tujuan: ${s.tujuan} | Perihal: ${s.perihal} | Tanggal Dikirim: ${new Date(s.tanggalDikirim).toLocaleDateString('id-ID')}\n`
+        
+        if (s.fileUrl && s.fileUrl.startsWith('data:')) {
+          const base64Parts = s.fileUrl.split(';base64,')
+          if (base64Parts.length === 2) {
+            const base64Data = base64Parts[1]
+            const mimeType = base64Parts[0].split('data:')[1]
+            let ext = 'pdf'
+            if (mimeType.includes('image/png')) ext = 'png'
+            else if (mimeType.includes('image/jpeg') || mimeType.includes('image/jpg')) ext = 'jpg'
+            else if (mimeType.includes('word')) ext = 'docx'
+
+            const fileName = `${s.nomorSurat.replace(/[\/\\:\*\?"<>\|]/g, '_')}.${ext}`
+            folderKeluar?.file(fileName, base64Data, { base64: true })
+          }
+        }
+      })
+
+      zip.file("laporan_arsip.txt", summaryText)
+
+      const content = await zip.generateAsync({ type: "blob" })
+      const link = document.createElement("a")
+      link.href = URL.createObjectURL(content)
+      link.download = `arsip_surat_${new Date().toISOString().split('T')[0]}_${Date.now()}.zip`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+
+      await clearAllLettersAction()
+      showSuccess("Database berhasil diarsipkan ke format ZIP & dikosongkan!")
+      
+      if (activeTab === 'dashboard') {
+        loadDashboardData()
+      } else if (activeTab === 'surat-masuk') {
+        loadSuratMasuk()
+      } else if (activeTab === 'surat-keluar') {
+        loadSuratKeluar()
+      }
+      loadUsageStats()
+    } catch (err: any) {
+      console.error(err)
+      alert(err.message || "Gagal mengarsipkan surat")
+    } finally {
+      setIsArchiving(false)
+    }
+  }
+
+  // Load initial global categories and usage stats + Trigger auto-sync in background
   useEffect(() => {
     loadGlobalCategories()
+    loadUsageStats()
+
+    const autoSync = async () => {
+      try {
+        const res = await syncEmailsAction()
+        if (res.success && res.count > 0) {
+          showSuccess(res.message)
+          loadUsageStats()
+          setRefreshTrigger(prev => prev + 1)
+        }
+      } catch (err) {
+        console.error("Auto-sync background error:", err)
+      }
+    }
+
+    // Run once after 2 seconds (non-blocking)
+    const timer = setTimeout(autoSync, 2000)
+
+    // Run every 5 minutes (300,000 ms)
+    const interval = setInterval(autoSync, 300000)
+
+    return () => {
+      clearTimeout(timer)
+      clearInterval(interval)
+    }
   }, [])
 
   const loadGlobalCategories = async () => {
@@ -217,6 +412,7 @@ export default function Dashboard() {
 
   // Route tab changes to fetch specific tab data
   useEffect(() => {
+    loadUsageStats()
     if (activeTab === 'dashboard') {
       loadDashboardData()
     } else if (activeTab === 'surat-masuk') {
@@ -228,7 +424,7 @@ export default function Dashboard() {
     } else if (activeTab === 'laporan') {
       loadLaporanData()
     }
-  }, [activeTab])
+  }, [activeTab, refreshTrigger])
 
   // Refetch lists when filters change
   useEffect(() => {
@@ -333,7 +529,9 @@ export default function Dashboard() {
       perihal: '',
       tanggalDiterima: new Date().toISOString().split('T')[0],
       jenisSuratId: categories[0]?.id.toString() || '',
+      fileUrl: '',
     })
+    setSmContentMode('upload')
     setModalError('')
     setIsSmModalOpen(true)
   }
@@ -346,7 +544,10 @@ export default function Dashboard() {
       perihal: item.perihal,
       tanggalDiterima: new Date(item.tanggalDiterima).toISOString().split('T')[0],
       jenisSuratId: item.jenisSuratId.toString(),
+      fileUrl: item.fileUrl || '',
     })
+    const isManualText = item.fileUrl ? (item.fileUrl.startsWith('data:text/html') || item.fileUrl.startsWith('data:text/plain')) : false
+    setSmContentMode(isManualText ? 'write' : 'upload')
     setModalError('')
     setIsSmModalOpen(true)
   }
@@ -364,6 +565,7 @@ export default function Dashboard() {
           perihal: smFormData.perihal,
           tanggalDiterima: smFormData.tanggalDiterima,
           jenisSuratId: Number(smFormData.jenisSuratId),
+          fileUrl: smFormData.fileUrl || undefined,
         })
         showSuccess('Surat masuk berhasil diperbarui!')
       } else {
@@ -373,6 +575,7 @@ export default function Dashboard() {
           perihal: smFormData.perihal,
           tanggalDiterima: smFormData.tanggalDiterima,
           jenisSuratId: Number(smFormData.jenisSuratId),
+          fileUrl: smFormData.fileUrl || undefined,
         })
         showSuccess('Surat masuk berhasil ditambahkan!')
       }
@@ -394,7 +597,9 @@ export default function Dashboard() {
       perihal: '',
       tanggalDikirim: new Date().toISOString().split('T')[0],
       jenisSuratId: categories[0]?.id.toString() || '',
+      fileUrl: '',
     })
+    setSkContentMode('upload')
     setModalError('')
     setIsSkModalOpen(true)
   }
@@ -407,7 +612,10 @@ export default function Dashboard() {
       perihal: item.perihal,
       tanggalDikirim: new Date(item.tanggalDikirim).toISOString().split('T')[0],
       jenisSuratId: item.jenisSuratId.toString(),
+      fileUrl: item.fileUrl || '',
     })
+    const isManualText = item.fileUrl ? (item.fileUrl.startsWith('data:text/html') || item.fileUrl.startsWith('data:text/plain')) : false
+    setSkContentMode(isManualText ? 'write' : 'upload')
     setModalError('')
     setIsSkModalOpen(true)
   }
@@ -425,6 +633,7 @@ export default function Dashboard() {
           perihal: skFormData.perihal,
           tanggalDikirim: skFormData.tanggalDikirim,
           jenisSuratId: Number(skFormData.jenisSuratId),
+          fileUrl: skFormData.fileUrl || undefined,
         })
         showSuccess('Surat keluar berhasil diperbarui!')
       } else {
@@ -434,6 +643,7 @@ export default function Dashboard() {
           perihal: skFormData.perihal,
           tanggalDikirim: skFormData.tanggalDikirim,
           jenisSuratId: Number(skFormData.jenisSuratId),
+          fileUrl: skFormData.fileUrl || undefined,
         })
         showSuccess('Surat keluar berhasil ditambahkan!')
       }
@@ -533,6 +743,24 @@ export default function Dashboard() {
     ]
     
     return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`
+  }
+
+  // Extract raw text content from base64 data URLs for editing
+  const getRawTextFromFileUrl = (fileUrl: string | null | undefined) => {
+    if (!fileUrl) return ''
+    if (!fileUrl.startsWith('data:text/html') && !fileUrl.startsWith('data:text/plain')) return ''
+    try {
+      const base64 = fileUrl.split(';base64,')[1]
+      if (!base64) return ''
+      const decoded = Buffer.from(base64, 'base64').toString('utf-8')
+      if (fileUrl.startsWith('data:text/html')) {
+        const match = decoded.match(/<body[^>]*>([\s\S]*)<\/body>/)
+        return match ? match[1] : decoded
+      }
+      return decoded
+    } catch (e) {
+      return ''
+    }
   }
 
   // Handle Logout
@@ -684,6 +912,8 @@ export default function Dashboard() {
               <BarChart3 className="h-5 w-5 flex-shrink-0" />
               Laporan
             </button>
+
+
           </nav>
         </div>
 
@@ -720,6 +950,28 @@ export default function Dashboard() {
               <Check className="h-3.5 w-3.5 stroke-[3px]" />
             </div>
             {successToast}
+          </div>
+        )}
+
+        {/* Peringatan Kapasitas Database Neon (10 Surat Limit) */}
+        {usageStats.isExceeded && (
+          <div className="mx-6 md:mx-8 mt-6 p-4.5 bg-amber-50 border border-amber-200 text-amber-900 rounded-2xl shadow-sm flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 animate-fade-in-down select-none font-sans">
+            <div className="flex items-start gap-3.5">
+              <div className="h-10 w-10 rounded-full bg-amber-500 text-white flex items-center justify-center flex-shrink-0 border border-amber-400">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div className="flex flex-col">
+                <span className="font-extrabold text-[14px]">Kapasitas Database Penuh ({usageStats.totalCount}/10 Surat)</span>
+                <span className="text-xs font-semibold text-amber-700/80 mt-0.5">Database gratis Neon Anda telah mencapai batas maksimal 10 surat. Harap arsipkan data ke komputer lokal untuk mengosongkan ruang.</span>
+              </div>
+            </div>
+            <button
+              onClick={handleArchiveAndClear}
+              disabled={isArchiving}
+              className="bg-amber-600 hover:bg-amber-700 active:scale-95 disabled:opacity-75 transition-all text-white font-extrabold text-xs px-4 py-2.5 rounded-xl shadow-md shadow-amber-800/10 cursor-pointer whitespace-nowrap self-end sm:self-center"
+            >
+              {isArchiving ? 'Mengarsipkan...' : 'Arsipkan & Kosongkan Data'}
+            </button>
           </div>
         )}
 
@@ -881,13 +1133,23 @@ export default function Dashboard() {
                 <h1 className="text-2xl font-extrabold tracking-tight text-zinc-800">Daftar Surat Masuk</h1>
                 <p className="text-sm font-semibold text-zinc-500 mt-0.5">Kelola dan arsipkan semua surat masuk dengan mudah.</p>
               </div>
-              <button 
-                onClick={handleSmOpenAddModal}
-                className="flex items-center justify-center gap-2 bg-[#1d56a5] text-white px-4 py-2.5 rounded-lg text-sm font-bold hover:bg-[#1a4d94] active:scale-[0.98] transition-all shadow-md shadow-blue-800/10 cursor-pointer"
-              >
-                <Plus className="h-4 w-4 stroke-[3px]" />
-                Tambah Surat Masuk
-              </button>
+              <div className="flex items-center gap-3">
+                <button 
+                  onClick={handleSyncEmails}
+                  disabled={isSyncing}
+                  className="flex items-center justify-center gap-2 bg-white text-zinc-700 border border-zinc-200 px-4 py-2.5 rounded-lg text-sm font-bold hover:bg-zinc-50 active:scale-[0.98] transition-all shadow-sm cursor-pointer disabled:opacity-50"
+                >
+                  <RefreshCw className={`h-4.5 w-4.5 text-zinc-500 ${isSyncing ? 'animate-spin' : ''}`} />
+                  {isSyncing ? 'Sinkronisasi...' : 'Sinkronisasi Email'}
+                </button>
+                <button 
+                  onClick={handleSmOpenAddModal}
+                  className="flex items-center justify-center gap-2 bg-[#1d56a5] text-white px-4 py-2.5 rounded-lg text-sm font-bold hover:bg-[#1a4d94] active:scale-[0.98] transition-all shadow-md shadow-blue-800/10 cursor-pointer"
+                >
+                  <Plus className="h-4 w-4 stroke-[3px]" />
+                  Tambah Surat Masuk
+                </button>
+              </div>
             </div>
 
             {/* Filters Area */}
@@ -1018,6 +1280,15 @@ export default function Dashboard() {
                             </td>
                             <td className="py-3 px-4 text-center whitespace-nowrap">
                               <div className="flex items-center justify-center gap-1.5">
+                                {item.fileUrl && (
+                                  <button 
+                                    onClick={() => openFileViewer(item.fileUrl, item.nomorSurat)}
+                                    className="p-1 text-zinc-400 hover:text-[#1d56a5] transition-colors cursor-pointer"
+                                    title="Lihat Berkas"
+                                  >
+                                    <Eye className="h-4 w-4" />
+                                  </button>
+                                )}
                                 <button 
                                   onClick={() => handleSmOpenEditModal(item)}
                                   className="p-1 text-zinc-400 hover:text-blue-600 transition-colors cursor-pointer"
@@ -1060,13 +1331,23 @@ export default function Dashboard() {
                 <h1 className="text-2xl font-extrabold tracking-tight text-zinc-800">Daftar Surat Keluar</h1>
                 <p className="text-sm font-semibold text-zinc-500 mt-0.5">Kelola dan arsipkan seluruh surat keluar dengan mudah.</p>
               </div>
-              <button 
-                onClick={handleSkOpenAddModal}
-                className="flex items-center justify-center gap-2 bg-[#1d56a5] text-white px-4 py-2.5 rounded-lg text-sm font-bold hover:bg-[#1a4d94] active:scale-[0.98] transition-all shadow-md shadow-blue-800/10 cursor-pointer"
-              >
-                <Plus className="h-4 w-4 stroke-[3px]" />
-                Tambah Surat Keluar
-              </button>
+              <div className="flex items-center gap-3">
+                <button 
+                  onClick={handleSyncEmails}
+                  disabled={isSyncing}
+                  className="flex items-center justify-center gap-2 bg-white text-zinc-700 border border-zinc-200 px-4 py-2.5 rounded-lg text-sm font-bold hover:bg-zinc-50 active:scale-[0.98] transition-all shadow-sm cursor-pointer disabled:opacity-50"
+                >
+                  <RefreshCw className={`h-4.5 w-4.5 text-zinc-500 ${isSyncing ? 'animate-spin' : ''}`} />
+                  {isSyncing ? 'Sinkronisasi...' : 'Sinkronisasi Email'}
+                </button>
+                <button 
+                  onClick={handleSkOpenAddModal}
+                  className="flex items-center justify-center gap-2 bg-[#1d56a5] text-white px-4 py-2.5 rounded-lg text-sm font-bold hover:bg-[#1a4d94] active:scale-[0.98] transition-all shadow-md shadow-blue-800/10 cursor-pointer"
+                >
+                  <Plus className="h-4 w-4 stroke-[3px]" />
+                  Tambah Surat Keluar
+                </button>
+              </div>
             </div>
 
             {/* Filters Area */}
@@ -1197,6 +1478,15 @@ export default function Dashboard() {
                             </td>
                             <td className="py-3 px-4 text-center whitespace-nowrap">
                               <div className="flex items-center justify-center gap-1.5">
+                                {item.fileUrl && (
+                                  <button 
+                                    onClick={() => openFileViewer(item.fileUrl, item.nomorSurat)}
+                                    className="p-1 text-zinc-400 hover:text-[#1d56a5] transition-colors cursor-pointer"
+                                    title="Lihat Berkas"
+                                  >
+                                    <Eye className="h-4 w-4" />
+                                  </button>
+                                )}
                                 <button 
                                   onClick={() => handleSkOpenEditModal(item)}
                                   className="p-1 text-zinc-400 hover:text-blue-600 transition-colors cursor-pointer"
@@ -1525,6 +1815,8 @@ export default function Dashboard() {
           </div>
         )}
 
+
+
       </main>
 
       {/* --- MODAL: CRUD SURAT MASUK (ADD/EDIT) --- */}
@@ -1613,6 +1905,115 @@ export default function Dashboard() {
                     </select>
                     <ChevronDown className="absolute right-3.5 top-3 h-4.5 w-4.5 text-zinc-400 pointer-events-none" />
                   </div>
+                </div>
+
+                <div className="flex flex-col gap-2 border-t border-zinc-100 pt-4.5">
+                  <span className="text-xs font-bold text-zinc-500">Isi Surat / Berkas</span>
+                  
+                  {/* Mode Selector Tab */}
+                  <div className="flex bg-zinc-100 p-1 rounded-lg">
+                    <button
+                      type="button"
+                      onClick={() => setSmContentMode('upload')}
+                      className={`flex-1 text-center py-1.5 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
+                        smContentMode === 'upload'
+                          ? 'bg-white text-zinc-800 shadow-sm'
+                          : 'text-zinc-400 hover:text-zinc-600'
+                      }`}
+                    >
+                      Unggah Berkas (PDF/Gambar)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSmContentMode('write')}
+                      className={`flex-1 text-center py-1.5 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
+                        smContentMode === 'write'
+                          ? 'bg-white text-zinc-800 shadow-sm'
+                          : 'text-zinc-400 hover:text-zinc-600'
+                      }`}
+                    >
+                      Tulis Isi Surat
+                    </button>
+                  </div>
+
+                  {/* Mode Content */}
+                  {smContentMode === 'upload' ? (
+                    <div className="flex flex-col gap-2">
+                      {smFormData.fileUrl && !smFormData.fileUrl.startsWith('data:text/html') && !smFormData.fileUrl.startsWith('data:text/plain') ? (
+                        <div className="p-3 bg-blue-50 border border-blue-100 rounded-lg flex items-center justify-between text-xs font-semibold">
+                          <div className="flex items-center gap-2 text-zinc-700 truncate">
+                            <FileText className="h-5 w-5 text-[#1d56a5] flex-shrink-0" />
+                            <span className="truncate">
+                              {smFormData.fileUrl.startsWith('data:application/pdf') 
+                                ? 'Berkas PDF Terlampir' 
+                                : smFormData.fileUrl.startsWith('data:image/')
+                                ? 'Berkas Gambar Terlampir'
+                                : 'Berkas Terlampir'}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setSmFormData({ ...smFormData, fileUrl: '' })}
+                            className="p-1 text-zinc-400 hover:text-red-600 hover:bg-white rounded-md transition-all cursor-pointer"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="relative border-2 border-dashed border-zinc-200 hover:border-[#1d56a5] transition-colors rounded-xl p-4.5 text-center flex flex-col items-center justify-center bg-[#f8fafc]">
+                          <input
+                            type="file"
+                            accept="application/pdf,image/png,image/jpeg,image/jpg"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0]
+                              if (!file) return
+                              
+                              if (!['application/pdf', 'image/png', 'image/jpeg', 'image/jpg'].includes(file.type)) {
+                                alert('Format berkas tidak didukung. Harap unggah PDF atau Gambar (PNG/JPG).')
+                                e.target.value = ''
+                                return
+                              }
+                              
+                              if (file.size > 5 * 1024 * 1024) {
+                                alert('Ukuran berkas terlalu besar. Maksimal 5MB.')
+                                e.target.value = ''
+                                return
+                              }
+
+                              const reader = new FileReader()
+                              reader.onloadend = () => {
+                                setSmFormData(prev => ({ ...prev, fileUrl: reader.result as string }))
+                              }
+                              reader.readAsDataURL(file)
+                            }}
+                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                          />
+                          <Upload className="h-7 w-7 text-zinc-400 mb-1.5" />
+                          <span className="text-[11px] font-bold text-zinc-600">Klik atau seret file PDF / Gambar</span>
+                          <span className="text-[9px] text-zinc-400 mt-0.5">Maksimal ukuran berkas 5MB</span>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-2">
+                      <textarea
+                        rows={5}
+                        placeholder="Ketik isi atau pesan surat masuk di sini..."
+                        value={getRawTextFromFileUrl(smFormData.fileUrl)}
+                        onChange={(e) => {
+                          const text = e.target.value
+                          if (!text) {
+                            setSmFormData(prev => ({ ...prev, fileUrl: '' }))
+                          } else {
+                            const html = `<html><body style="font-family: sans-serif; line-height: 1.6; padding: 20px; color: #27272a; white-space: pre-wrap;">${text}</body></html>`
+                            const base64 = Buffer.from(html).toString('base64')
+                            setSmFormData(prev => ({ ...prev, fileUrl: `data:text/html;charset=utf-8;base64,${base64}` }))
+                          }
+                        }}
+                        className="w-full bg-[#f8fafc] border border-zinc-200 rounded-lg px-3.5 py-2.5 text-xs font-semibold text-zinc-700 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-blue-400 transition-all resize-none"
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1728,6 +2129,115 @@ export default function Dashboard() {
                     <ChevronDown className="absolute right-3.5 top-3 h-4.5 w-4.5 text-zinc-400 pointer-events-none" />
                   </div>
                 </div>
+
+                <div className="flex flex-col gap-2 border-t border-zinc-100 pt-4.5">
+                  <span className="text-xs font-bold text-zinc-500">Isi Surat / Berkas</span>
+                  
+                  {/* Mode Selector Tab */}
+                  <div className="flex bg-zinc-100 p-1 rounded-lg">
+                    <button
+                      type="button"
+                      onClick={() => setSkContentMode('upload')}
+                      className={`flex-1 text-center py-1.5 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
+                        skContentMode === 'upload'
+                          ? 'bg-white text-zinc-800 shadow-sm'
+                          : 'text-zinc-400 hover:text-zinc-600'
+                      }`}
+                    >
+                      Unggah Berkas (PDF/Gambar)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSkContentMode('write')}
+                      className={`flex-1 text-center py-1.5 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
+                        skContentMode === 'write'
+                          ? 'bg-white text-zinc-800 shadow-sm'
+                          : 'text-zinc-400 hover:text-zinc-600'
+                      }`}
+                    >
+                      Tulis Isi Surat
+                    </button>
+                  </div>
+
+                  {/* Mode Content */}
+                  {skContentMode === 'upload' ? (
+                    <div className="flex flex-col gap-2">
+                      {skFormData.fileUrl && !skFormData.fileUrl.startsWith('data:text/html') && !skFormData.fileUrl.startsWith('data:text/plain') ? (
+                        <div className="p-3 bg-[#e6f4ea] border border-[#c3ebb8] rounded-lg flex items-center justify-between text-xs font-semibold">
+                          <div className="flex items-center gap-2 text-zinc-700 truncate">
+                            <FileText className="h-5 w-5 text-emerald-700 flex-shrink-0" />
+                            <span className="truncate">
+                              {skFormData.fileUrl.startsWith('data:application/pdf') 
+                                ? 'Berkas PDF Terlampir' 
+                                : skFormData.fileUrl.startsWith('data:image/')
+                                ? 'Berkas Gambar Terlampir'
+                                : 'Berkas Terlampir'}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setSkFormData({ ...skFormData, fileUrl: '' })}
+                            className="p-1 text-zinc-400 hover:text-red-600 hover:bg-white rounded-md transition-all cursor-pointer"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="relative border-2 border-dashed border-zinc-200 hover:border-emerald-700 transition-colors rounded-xl p-4.5 text-center flex flex-col items-center justify-center bg-[#f8fafc]">
+                          <input
+                            type="file"
+                            accept="application/pdf,image/png,image/jpeg,image/jpg"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0]
+                              if (!file) return
+                              
+                              if (!['application/pdf', 'image/png', 'image/jpeg', 'image/jpg'].includes(file.type)) {
+                                alert('Format berkas tidak didukung. Harap unggah PDF atau Gambar (PNG/JPG).')
+                                e.target.value = ''
+                                return
+                              }
+                              
+                              if (file.size > 5 * 1024 * 1024) {
+                                alert('Ukuran berkas terlalu besar. Maksimal 5MB.')
+                                e.target.value = ''
+                                return
+                              }
+
+                              const reader = new FileReader()
+                              reader.onloadend = () => {
+                                setSkFormData(prev => ({ ...prev, fileUrl: reader.result as string }))
+                              }
+                              reader.readAsDataURL(file)
+                            }}
+                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                          />
+                          <Upload className="h-7 w-7 text-zinc-400 mb-1.5" />
+                          <span className="text-[11px] font-bold text-zinc-600">Klik atau seret file PDF / Gambar</span>
+                          <span className="text-[9px] text-zinc-400 mt-0.5">Maksimal ukuran berkas 5MB</span>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-2">
+                      <textarea
+                        rows={5}
+                        placeholder="Ketik isi atau pesan surat keluar di sini..."
+                        value={getRawTextFromFileUrl(skFormData.fileUrl)}
+                        onChange={(e) => {
+                          const text = e.target.value
+                          if (!text) {
+                            setSkFormData(prev => ({ ...prev, fileUrl: '' }))
+                          } else {
+                            const html = `<html><body style="font-family: sans-serif; line-height: 1.6; padding: 20px; color: #27272a; white-space: pre-wrap;">${text}</body></html>`
+                            const base64 = Buffer.from(html).toString('base64')
+                            setSkFormData(prev => ({ ...prev, fileUrl: `data:text/html;charset=utf-8;base64,${base64}` }))
+                          }
+                        }}
+                        className="w-full bg-[#f8fafc] border border-zinc-200 rounded-lg px-3.5 py-2.5 text-xs font-semibold text-zinc-700 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-blue-400 transition-all resize-none"
+                      />
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div className="bg-[#f8fafc] px-6 py-4.5 border-t border-zinc-200 flex items-center justify-end gap-3 select-none">
@@ -1830,6 +2340,8 @@ export default function Dashboard() {
         </div>
       )}
 
+
+
       {/* --- CONFIRM DELETE DIALOG --- */}
       {deleteConfirm.isOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in">
@@ -1897,6 +2409,99 @@ export default function Dashboard() {
               >
                 Keluar
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- FILE VIEWER DIALOG --- */}
+      {viewerOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in select-none">
+          <div className="bg-white text-zinc-800 rounded-2xl border border-zinc-200 shadow-2xl w-full max-w-4xl h-[85vh] overflow-hidden flex flex-col animate-zoom-in">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-100 bg-[#f8fafc]">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-blue-50 text-[#1d56a5] rounded-lg border border-blue-100">
+                  <FileText className="h-5 w-5" />
+                </div>
+                <div className="text-left">
+                  <h3 className="text-sm font-extrabold text-zinc-800">Pratinjau Dokumen Surat</h3>
+                  <p className="text-[10px] font-semibold text-zinc-500 truncate max-w-[400px]">
+                    No. Surat: {viewerTitle}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {/* Download button */}
+                <a
+                  href={viewerFileUrl}
+                  download={`surat_${viewerTitle.replace(/[\/\\:\*\?"<>\|]/g, '_')}`}
+                  className="p-1.5 rounded-lg border border-zinc-200 hover:bg-zinc-50 text-zinc-600 hover:text-[#1d56a5] transition-all cursor-pointer flex items-center gap-1.5 text-xs font-bold px-3 bg-white"
+                >
+                  <Download className="h-4 w-4" />
+                  Unduh
+                </a>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setViewerOpen(false)
+                    setViewerFileUrl('')
+                  }}
+                  className="p-1.5 rounded-lg border border-zinc-100 hover:bg-zinc-100 text-zinc-400 hover:text-[#1d56a5] transition-all cursor-pointer"
+                >
+                  <X className="h-4.5 w-4.5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Body / Viewer Content */}
+            <div className="flex-1 bg-zinc-100 p-4 overflow-auto flex items-center justify-center min-h-0">
+              {viewerFileUrl.startsWith('data:application/pdf') ? (
+                <object
+                  data={viewerFileUrl}
+                  type="application/pdf"
+                  className="w-full h-full rounded-lg shadow-sm border border-zinc-200"
+                >
+                  <div className="text-center p-6 bg-white rounded-xl border border-zinc-200 shadow-xs max-w-md">
+                    <p className="text-sm font-bold text-zinc-700 mb-4">Browser Anda tidak mendukung peninjauan PDF secara langsung.</p>
+                    <a
+                      href={viewerFileUrl}
+                      download={`surat_${viewerTitle.replace(/[\/\\:\*\?"<>\|]/g, '_')}`}
+                      className="inline-flex items-center gap-2 bg-[#1d56a5] text-white px-4 py-2.5 rounded-lg text-xs font-bold hover:bg-[#1a4d94] active:scale-95 transition-all shadow-md shadow-blue-800/10"
+                    >
+                      <Download className="h-4.5 w-4.5" />
+                      Unduh Berkas PDF
+                    </a>
+                  </div>
+                </object>
+              ) : viewerFileUrl.startsWith('data:image/') ? (
+                <img
+                  src={viewerFileUrl}
+                  alt={`Dokumen ${viewerTitle}`}
+                  className="max-w-full max-h-full object-contain rounded-lg shadow-md"
+                />
+              ) : (viewerFileUrl.startsWith('data:text/html') || viewerFileUrl.startsWith('data:text/plain')) ? (
+                <iframe
+                  src={viewerFileUrl}
+                  title={`Isi Surat ${viewerTitle}`}
+                  className="w-full h-full rounded-lg shadow-sm border border-zinc-200 bg-white"
+                  sandbox="allow-same-origin"
+                />
+              ) : (
+                <div className="text-center p-8 bg-white rounded-xl border border-zinc-200 shadow-sm max-w-md">
+                  <FileText className="h-12 w-12 text-zinc-300 mx-auto mb-3" />
+                  <p className="text-sm font-bold text-zinc-700 mb-2">Pratinjau tidak tersedia untuk format berkas ini.</p>
+                  <p className="text-xs text-zinc-500 mb-4">Format berkas atau dokumen ini harus diunduh untuk dapat dibuka di komputer Anda.</p>
+                  <a
+                    href={viewerFileUrl}
+                    download={`surat_${viewerTitle.replace(/[\/\\:\*\?"<>\|]/g, '_')}`}
+                    className="inline-flex items-center gap-2 bg-[#1d56a5] text-white px-4 py-2.5 rounded-lg text-xs font-bold hover:bg-[#1a4d94] active:scale-95 transition-all shadow-md shadow-blue-800/10"
+                  >
+                    <Download className="h-4.5 w-4.5" />
+                    Unduh Berkas
+                  </a>
+                </div>
+              )}
             </div>
           </div>
         </div>

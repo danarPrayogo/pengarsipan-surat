@@ -428,7 +428,7 @@ export default function Login() {
                     <Mail className="h-5 w-5 text-blue-500 flex-shrink-0 mt-0.5" />
                     <div>
                       Masukkan email Administrator yang terdaftar. Sistem akan mengirimkan kode verifikasi 6 digit ke email Anda.
-                      <span className="block mt-1 font-bold text-[#1d56a5]">*Email default: danarprayoga337@gmail.com</span>
+                      <span className="block mt-1 font-bold text-[#1d56a5]">*Email default: danarprayoogo@gmail.com</span>
                     </div>
                   </div>
 
@@ -447,7 +447,7 @@ export default function Login() {
                     </label>
                     <input
                       type="email"
-                      placeholder="Masukkan email Anda (misal: danarprayoga337@gmail.com)"
+                      placeholder="Masukkan email Anda (misal: danarprayoogo@gmail.com)"
                       value={resetEmail}
                       onChange={(e) => setResetEmail(e.target.value)}
                       className="w-full bg-[#f8fafc] border border-zinc-200 rounded-lg px-3.5 py-2.5 text-xs font-semibold text-zinc-700 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-blue-400 transition-all"
